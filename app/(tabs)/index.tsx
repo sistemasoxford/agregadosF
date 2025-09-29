@@ -1,75 +1,175 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { useVehicleData } from "@/hooks/useCameraData";
+import { useTodaysVehicles, VehicleItem } from "@/hooks/useTodaysVehicles";
+import { useVehiclesByPlate } from "@/hooks/useVehiclesByPlate";
+import { useRouter } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Animated,
+  SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { updateVehiclePlate } from "../../app/services/tollgate/tollgateService";
+import VehicleList from "../../components/ui/VehicleList";
+import { useAuth } from "../../hooks/useAuth";
 
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
 
-export default function HomeScreen() {
+export default function HomeTab() {
+  const { userId, loading: authLoading } = useAuth();
+  const router = useRouter();
+
+  const [plateSearch, setPlateSearch] = useState("");
+  const [searchQuery, setSearchQuery] = useState(""); // 🔑 este dispara la búsqueda
+  const [page, setPage] = useState(1);
+  const [vehicles, setVehicles] = useState<VehicleItem[]>([]); // 🔹 estado local para la tabla
+
+  // 👇 Hooks
+  const {
+    data: todaysVehicles,
+    loading: vehiclesLoading,
+    error,
+    pagination,
+  } = useTodaysVehicles(page, 10);
+
+  const {
+    data: searchedVehicles,
+    loading: searching,
+    error: searchError,
+    pagination: searchPagination,
+  } = useVehiclesByPlate(searchQuery, page, 10);
+
+  // 👇 Sincronizar el estado local con los hooks según la búsqueda
+  useEffect(() => {
+    setVehicles(searchQuery ? searchedVehicles : todaysVehicles);
+  }, [todaysVehicles, searchedVehicles, searchQuery]);
+
+  const loading = searchQuery ? searching : vehiclesLoading;
+  const paginationData = searchQuery ? searchPagination : pagination;
+
+  // 👇 Manejar edición de placa
+  const handleEditPlate = async (oldPlate: string, newPlate: string, eventId: string) => {
+    try {
+      await updateVehiclePlate(eventId, newPlate);
+
+      // 🔄 Actualizar la tabla localmente
+      setVehicles((prev) =>
+        prev.map((v) => (v.id === eventId ? { ...v, plate: newPlate } : v))
+      );
+    } catch (error) {
+      console.error("❌ Error actualizando placa:", error);
+    }
+  };
+
+  const handleLoadMore = () => {
+    if (paginationData && page < paginationData.totalPages && !loading) {
+      setPage((prev) => prev + 1);
+    }
+  };
+
+  const { status, inactiveSeconds, isConnected } = useVehicleData();
+
+  const blinkAnim = useRef(new Animated.Value(0)).current;
+  const blinkAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  useEffect(() => {
+    if (!authLoading && !userId) {
+      router.replace("/login");
+    }
+  }, [authLoading, userId, router]);
+
+  useEffect(() => {
+    if (!isConnected) {
+      blinkAnimationRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(blinkAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+          Animated.timing(blinkAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+        ])
+      );
+      blinkAnimationRef.current.start();
+    } else {
+      if (blinkAnimationRef.current) {
+        blinkAnimationRef.current.stop();
+        blinkAnim.setValue(0);
+      }
+    }
+  }, [isConnected, blinkAnim]);
+
+  if (authLoading || loading) {
+    return (
+      <View style={styles.center}>
+        <Text>Cargando...</Text>
+      </View>
+    );
+  }
+
+  if (!userId) return null;
+
+  if (error || searchError) {
+    return (
+      <View style={styles.center}>
+        <Text>Error: {error || searchError}</Text>
+      </View>
+    );
+  }
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" />
+      <View style={styles.container}>
+        <Text style={[styles.keepAliveText, { color: status === "active" ? "green" : "red" }]}>
+          {status === "active" ? "✅ Cámara activa" : "❌ Cámara inactiva"}
+        </Text>
+
+        {!isConnected && (
+          <Animated.Text style={[styles.offlineText, { opacity: blinkAnim }]}>
+            ⚠️ No hay conexión con el servidor
+          </Animated.Text>
+        )}
+
+        <Text style={styles.counterText}>
+          ⏱ {status === "active" ? "Última señal hace" : "Inactivo desde hace"} {inactiveSeconds} segundos
+        </Text>
+
+        {/* 🔍 Input con debounce */}
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Buscar por placa..."
+          value={plateSearch}
+          onChangeText={setPlateSearch} // 🔹 solo actualiza el texto
+          onSubmitEditing={() => {
+            setSearchQuery(plateSearch); // 🔹 dispara búsqueda
+            setPage(1); // reinicia página
+          }}
+          returnKeyType="search"
         />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+
+        <VehicleList
+          data={vehicles}
+          loading={loading}
+          hasMore={paginationData ? page < paginationData.totalPages : false}
+          onLoadMore={handleLoadMore}
+          onEditPlate={handleEditPlate} // 👈 asignamos callback
+        />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  safeArea: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1, padding: 10 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  keepAliveText: { fontSize: 18, fontWeight: "bold", marginBottom: 5 },
+  counterText: { fontSize: 16, marginBottom: 10, color: "#666" },
+  offlineText: { fontSize: 16, fontWeight: "bold", color: "red", marginBottom: 10 },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
   },
 });
